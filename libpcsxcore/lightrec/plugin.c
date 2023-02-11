@@ -443,15 +443,14 @@ static void lightrec_restore_regs(struct lightrec_state *state)
 extern void intExecuteBlock();
 extern void gen_interupt();
 
-static void lightrec_plugin_execute_internal(bool block_only)
+static void lightrec_plugin_execute_internal(void)
 {
 	u32 flags;
 
 	gen_interupt();
 
 	// step during early boot so that 0x80030000 fastboot hack works
-	booting = block_only;
-	if (block_only)
+	if (booting)
 		next_interupt = psxRegs.cycle;
 
 	if (use_pcsx_interpreter) {
@@ -482,6 +481,9 @@ static void lightrec_plugin_execute_internal(bool block_only)
 
 		if (flags & LIGHTREC_EXIT_SYSCALL)
 			psxException(0x20, 0);
+
+		if (booting && (psxRegs.pc & 0xff800000) == 0x80000000)
+			booting = false;
 	}
 
 	if ((psxRegs.CP0.n.Cause & psxRegs.CP0.n.Status & 0x300) &&
@@ -500,14 +502,15 @@ static void lightrec_plugin_execute(void)
 		lightrec_plugin_sync_regs_from_pcsx();
 
 	while (!stop)
-		lightrec_plugin_execute_internal(false);
+		lightrec_plugin_execute_internal();
 
 	lightrec_plugin_sync_regs_to_pcsx();
 }
 
 static void lightrec_plugin_execute_block(void)
 {
-	lightrec_plugin_execute_internal(true);
+	booting = true;
+	lightrec_plugin_execute_internal();
 }
 
 static void lightrec_plugin_clear(u32 addr, u32 size)
