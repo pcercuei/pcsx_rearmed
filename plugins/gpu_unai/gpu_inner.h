@@ -463,6 +463,71 @@ static inline u32 gpuPolyTexGetSrc(const gpu_unai_t &gpu_unai, u32 l_u, u32 l_v,
 	return uSrc;
 }
 
+static void gpuPolyPlain16(const gpu_unai_t &gpu_unai, le16_t *pDst, u32 count,
+			   int CF, bool SKIP_USRC_MSB_MASK)
+{
+	const uint_fast16_t pix15 = gpu_unai.PixelData;
+	uint_fast16_t uSrc, uDst;
+
+	do {
+		// NOTE: Don't enable CF_BLITMASK  pixel skipping (speed hack)
+		//  on untextured polys. It seems to do more harm than good: see
+		//  gravestone text at end of Medieval intro sequence. -senquack
+		//if (CF_BLITMASK) { if ((bMsk>>((((uintptr_t)pDst)>>1)&7))&1) { goto endpolynotextnogou; } }
+
+		if (!CF_MASKCHECK || !(le16_raw(*pDst) & HTOLE16(0x8000))) {
+			uSrc = pix15;
+
+			if (CF_BLEND) {
+				uDst = le16_to_u16(*pDst);
+				uSrc = gpuBlending(pix15, uDst, CF_BLENDMODE, SKIP_USRC_MSB_MASK);
+			}
+
+			if (CF_MASKSET)
+				uSrc |= 0x8000;
+
+			*pDst++ = u16_to_le16(uSrc);
+		}
+	} while (count-- > 1);
+}
+
+template<int CF, bool SKIP_USRC_MSB_MASK>
+static inline void gpuPolyPlain(const gpu_unai_t &gpu_unai, le16_t *pDst, u32 count)
+{
+	const u32 pix = (gpu_unai.PixelData << 16) | gpu_unai.PixelData;
+	u32 uSrc, uDst;
+
+	if ((uintptr_t)pDst & 0x3) {
+		/* Ensure we are aligned for 32-bit IO */
+		gpuPolyPlain16(gpu_unai, pDst, 1, CF, SKIP_USRC_MSB_MASK);
+		count--;
+		pDst++;
+	}
+
+	for (; count >= 2; count -= 2) {
+		if (!CF_MASKCHECK || !(le32_raw(*(le32_t *)pDst) & HTOLE32(0x80008000))) {
+			uSrc = pix;
+
+			if (CF_BLEND) {
+				uDst = le32_to_u32(*(le32_t *)pDst);
+				uSrc = gpuBlending32<CF_BLENDMODE, SKIP_USRC_MSB_MASK>(uSrc, uDst);
+			}
+
+			if (CF_MASKSET)
+				uSrc |= 0x80008000;
+
+			*(le32_t *)pDst = u32_to_le32(uSrc);
+		} else {
+			gpuPolyPlain16(gpu_unai, pDst, 2, CF, SKIP_USRC_MSB_MASK);
+		}
+
+		pDst += 2;
+	}
+
+	if (count)
+		gpuPolyPlain16(gpu_unai, pDst, 1, CF, SKIP_USRC_MSB_MASK);
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 //  GPU Polygon innerloops generator
 
@@ -502,30 +567,7 @@ static void gpuPolySpanFn(const gpu_unai_t &gpu_unai, le16_t *pDst, u32 count)
 	{
 		if (!CF_GOURAUD)
 		{
-			// UNTEXTURED, NO GOURAUD
-			const u16 pix15 = gpu_unai.PixelData;
-			do {
-				// NOTE: Don't enable CF_BLITMASK  pixel skipping (speed hack)
-				//  on untextured polys. It seems to do more harm than good: see
-				//  gravestone text at end of Medieval intro sequence. -senquack
-				//if (CF_BLITMASK) { if ((bMsk>>((((uintptr_t)pDst)>>1)&7))&1) { goto endpolynotextnogou; } }
-
-				if (!CF_MASKCHECK || !(le16_raw(*pDst) & HTOLE16(0x8000))) {
-					if (CF_BLEND) {
-						uDst = le16_to_u16(*pDst);
-						uSrc = gpuBlending(pix15, uDst, CF_BLENDMODE, skip_uSrc_mask);
-					} else {
-						uSrc = pix15;
-					}
-
-					if (CF_MASKSET)
-						uSrc |= 0x8000;
-
-					*pDst = u16_to_le16(uSrc);
-				}
-
-				pDst++;
-			} while(--count);
+			gpuPolyPlain<CF, skip_uSrc_mask>(gpu_unai, pDst, count);
 		}
 		else
 		{

@@ -101,6 +101,72 @@ GPU_INLINE uint_fast16_t gpuBlending(uint_fast16_t uSrc, uint_fast16_t uDst,
 }
 
 
+// Same as gpuBlendingGeneric, but blends two pixels at a time
+template <int BLENDMODE, bool SKIP_USRC_MSB_MASK>
+GPU_INLINE u32 gpuBlending32(u32 uSrc, u32 uDst)
+{
+	// These use Blargg's bitwise modulo-clamping:
+	//  http://blargg.8bitalley.com/info/rgb_mixing.html
+	//  http://blargg.8bitalley.com/info/rgb_clamped_add.html
+	//  http://blargg.8bitalley.com/info/rgb_clamped_sub.html
+
+	u32 mix;
+
+	// 0.5 x Back + 0.5 x Forward
+	if (BLENDMODE==0) {
+#ifdef GPU_UNAI_USE_ACCURATE_BLENDING
+		// Slower, but more accurate (doesn't lose LSB data)
+		uDst &= 0x7fff7fff;
+		if (!SKIP_USRC_MSB_MASK)
+			uSrc &= 0x7fff7fff;
+		mix = ((uSrc + uDst) - ((uSrc ^ uDst) & 0x04210421)) >> 1;
+#else
+		mix = ((uDst & 0x7bde7bde) + (uSrc & 0x7bde7bde)) >> 1;
+#endif
+	}
+
+	// 1.0 x Back + 1.0 x Forward
+	if (BLENDMODE==1) {
+		uDst &= 0x7fff7fff;
+		if (!SKIP_USRC_MSB_MASK)
+			uSrc &= 0x7fff7fff;
+		u32 sum      = uSrc + uDst;
+		u32 low_bits = (uSrc ^ uDst) & 0x04210421;
+		u32 carries  = (sum - low_bits) & 0x84208420;
+		u32 modulo   = sum - carries;
+		u32 clamp    = carries - (carries >> 5);
+		mix = modulo | clamp;
+	}
+
+	// 1.0 x Back - 1.0 x Forward
+	if (BLENDMODE==2) {
+		uDst &= 0x7fff7fff;
+		if (!SKIP_USRC_MSB_MASK)
+			uSrc &= 0x7fff7fff;
+		u32 diff     = uDst - uSrc + 0x84208420;
+		u32 low_bits = (uDst ^ uSrc) & 0x84208420;
+		u32 borrows  = (diff - low_bits) & 0x84208420;
+		u32 modulo   = diff - borrows;
+		u32 clamp    = borrows - (borrows >> 5);
+		mix = modulo & clamp;
+	}
+
+	// 1.0 x Back + 0.25 x Forward
+	if (BLENDMODE==3) {
+		uDst &= 0x7fff7fff;
+		uSrc = ((uSrc >> 2) & 0x1ce71ce7);
+		u32 sum      = uSrc + uDst;
+		u32 low_bits = (uSrc ^ uDst) & 0x04210421;
+		u32 carries  = (sum - low_bits) & 0x84208420;
+		u32 modulo   = sum - carries;
+		u32 clamp    = carries - (carries >> 5);
+		mix = modulo | clamp;
+	}
+
+	return mix;
+}
+
+
 ////////////////////////////////////////////////////////////////////////////////
 // Convert bgr555 color in uSrc to padded u32 5.4:5.4:5.4 bgr fixed-pt
 //  color triplet suitable for use with HQ 24-bit quantization.
