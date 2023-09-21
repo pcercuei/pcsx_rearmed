@@ -528,6 +528,110 @@ static inline void gpuPolyPlain(const gpu_unai_t &gpu_unai, le16_t *pDst, u32 co
 		gpuPolyPlain16(gpu_unai, pDst, 1, CF, SKIP_USRC_MSB_MASK);
 }
 
+static void gpuPolyGouraud16(const gpu_unai_t &gpu_unai, le16_t *pDst, u32 count,
+			     gcol_t l_gCol, int CF, bool SKIP_USRC_MSB_MASK)
+{
+	gcol_t l_gInc = gpu_unai.gInc;
+	u16 uSrc, uDst;
+
+	do {
+		// See note in above loop regarding CF_BLITMASK
+		//if (CF_BLITMASK) { if ((bMsk>>((((uintptr_t)pDst)>>1)&7))&1) goto endpolynotextgou; }
+
+		if (!CF_MASKCHECK || !(le16_raw(*pDst) & HTOLE16(0x8000))) {
+			if (CF_BLEND)
+				uDst = le16_to_u16(*pDst);
+
+			if (CF_DITHER) {
+				// GOURAUD, DITHER
+
+				u32 uSrc24 = gpuLightingRGB24(l_gCol);
+				if (CF_BLEND)
+					uSrc24 = gpuBlending24(uSrc24, uDst, CF_BLENDMODE);
+
+				uSrc = gpuColorQuantization24(uSrc24, pDst, CF_DITHER);
+			} else {
+				// GOURAUD, NO DITHER
+
+				uSrc = gpuLightingRGB(l_gCol);
+				if (CF_BLEND)
+					uSrc = gpuBlending(uSrc, uDst, CF_BLENDMODE, SKIP_USRC_MSB_MASK);
+			}
+
+			if (CF_MASKSET)
+				uSrc |= 0x8000;
+
+			*pDst = u16_to_le16(uSrc);
+		}
+
+		pDst++;
+		l_gCol.raw += l_gInc.raw;
+	}
+	while (--count);
+}
+
+template<int CF, bool SKIP_USRC_MSB_MASK>
+static inline void gpuPolyGouraud(const gpu_unai_t &gpu_unai, le16_t *pDst, u32 count)
+{
+	gcol_t l_gCol = gpu_unai.gCol;
+	gcol_t l_gInc = gpu_unai.gInc;
+	u32 uSrc, uDst, tmp1, tmp2;
+
+	if ((uintptr_t)pDst & 0x3) {
+		/* Ensure we are aligned for 32-bit IO */
+		gpuPolyGouraud16(gpu_unai, pDst, 1, l_gCol, CF, SKIP_USRC_MSB_MASK);
+		count--;
+		pDst++;
+		l_gCol.raw += l_gInc.raw;
+	}
+
+	for (; count >= 2; count -= 2) {
+		// See note in above loop regarding CF_BLITMASK
+		//if (CF_BLITMASK) { if ((bMsk>>((((uintptr_t)pDst)>>1)&7))&1) goto endpolynotextgou; }
+
+		if (!CF_MASKCHECK || !(le32_raw(*(le32_t *)pDst) & HTOLE32(0x80008000))) {
+			gcol_t gCol2 = l_gCol;
+			gCol2.raw += l_gInc.raw;
+
+			if (CF_BLEND)
+				uDst = le32_to_u32(*(le32_t *)pDst);
+
+			if (CF_DITHER) {
+				tmp1 = gpuLightingRGB24(l_gCol);
+				tmp2 = gpuLightingRGB24(gCol2);
+				if (CF_BLEND) {
+					tmp1 = gpuBlending24(tmp1, uDst >> 16, CF_BLENDMODE);
+					tmp2 = gpuBlending24(tmp2, (u16)uDst, CF_BLENDMODE);
+				}
+
+				tmp1 = gpuColorQuantization24(tmp1, pDst, CF_DITHER);
+				tmp2 = gpuColorQuantization24(tmp2, pDst + 2, CF_DITHER);
+
+				uSrc = (tmp1 << 16) | tmp2;
+			} else {
+				uSrc = ((u32)gpuLightingRGB(gCol2) << 16)
+					| gpuLightingRGB(l_gCol);
+
+				if (CF_BLEND)
+					uSrc = gpuBlending32<CF_BLENDMODE, SKIP_USRC_MSB_MASK>(uSrc, uDst);
+			}
+
+			if (CF_MASKSET)
+				uSrc |= 0x80008000;
+
+			*(le32_t *)pDst = u32_to_le32(uSrc);
+		} else {
+			gpuPolyGouraud16(gpu_unai, pDst, 2, l_gCol, CF, SKIP_USRC_MSB_MASK);
+		}
+
+		pDst += 2;
+		l_gCol.raw += l_gInc.raw * 2;
+	}
+
+	if (count)
+		gpuPolyGouraud16(gpu_unai, pDst, 1, l_gCol, CF, SKIP_USRC_MSB_MASK);
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 //  GPU Polygon innerloops generator
 
@@ -557,7 +661,6 @@ static void gpuPolySpanFn(const gpu_unai_t &gpu_unai, le16_t *pDst, u32 count)
 	//  For textured prims, the generic lighting funcs always return it unset. (bonus!)
 	const bool skip_uSrc_mask = MSB_PRESERVED ? (!CF_TEXTMODE) : (!CF_TEXTMODE) || CF_LIGHT;
 	bool should_blend;
-	uint_fast16_t uSrc, uDst;
 	u32 bMsk;
 
 	if (CF_BLITMASK)
@@ -566,55 +669,9 @@ static void gpuPolySpanFn(const gpu_unai_t &gpu_unai, le16_t *pDst, u32 count)
 	if (!CF_TEXTMODE)
 	{
 		if (!CF_GOURAUD)
-		{
 			gpuPolyPlain<CF, skip_uSrc_mask>(gpu_unai, pDst, count);
-		}
 		else
-		{
-			// UNTEXTURED, GOURAUD
-			gcol_t l_gCol = gpu_unai.gCol;
-			gcol_t l_gInc = gpu_unai.gInc;
-
-			do {
-				// See note in above loop regarding CF_BLITMASK
-				//if (CF_BLITMASK) { if ((bMsk>>((((uintptr_t)pDst)>>1)&7))&1) goto endpolynotextgou; }
-
-				if (!CF_MASKCHECK || !(le16_raw(*pDst) & HTOLE16(0x8000))) {
-					if (CF_BLEND)
-						uDst = le16_to_u16(*pDst);
-
-					if (CF_DITHER) {
-						// GOURAUD, DITHER
-
-						u32 uSrc24 = gpuLightingRGB24(l_gCol);
-						if (CF_BLEND) {
-							uDst = le16_to_u16(*pDst);
-							uSrc24 = gpuBlending24(uSrc24, uDst, CF_BLENDMODE);
-						}
-
-						uSrc = gpuColorQuantization24(uSrc24, pDst, CF_DITHER);
-					} else {
-						// GOURAUD, NO DITHER
-
-						uSrc = gpuLightingRGB(l_gCol);
-
-						if (CF_BLEND) {
-							uDst = le16_to_u16(*pDst);
-							uSrc = gpuBlending(uSrc, uDst, CF_BLENDMODE, skip_uSrc_mask);
-						}
-					}
-
-					if (CF_MASKSET)
-						uSrc |= 0x8000;
-
-					*pDst = u16_to_le16(uSrc);
-				}
-
-				pDst++;
-				l_gCol.raw += l_gInc.raw;
-			}
-			while (--count);
-		}
+			gpuPolyGouraud<CF, skip_uSrc_mask>(gpu_unai, pDst, count);
 	}
 	else
 	{
