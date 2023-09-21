@@ -22,22 +22,28 @@
 #ifndef __GPU_UNAI_GPU_INNER_H__
 #define __GPU_UNAI_GPU_INNER_H__
 
+#define BIT(x) (1 << (x))
+
 ///////////////////////////////////////////////////////////////////////////////
 // Inner loop driver instantiation file
 
 ///////////////////////////////////////////////////////////////////////////////
 //  Option Masks (CF template paramter)
-#define  CF_LIGHT     ((CF>> 0)&1) // Lighting
-#define  CF_BLEND     ((CF>> 1)&1) // Blending
-#define  CF_MASKCHECK ((CF>> 2)&1) // Mask bit check
+#define  CF_LIGHT     (CF & BIT(0)) // Lighting
+#define  CF_BLEND     (CF & BIT(1)) // Blending
+#define  CF_MASKCHECK (CF & BIT(2)) // Mask bit check
 #define  CF_BLENDMODE ((CF>> 3)&3) // Blend mode   0..3
 #define  CF_TEXTMODE  ((CF>> 5)&3) // Texture mode 1..3 (0: texturing disabled)
-#define  CF_GOURAUD   ((CF>> 7)&1) // Gouraud shading
-#define  CF_MASKSET   ((CF>> 8)&1) // Mask bit set
-#define  CF_DITHER    ((CF>> 9)&1) // Dithering
-#define  CF_BLITMASK  ((CF>>10)&1) // blit_mask check (skip rendering pixels
+#define  CF_GOURAUD   (CF & BIT(7)) // Gouraud shading
+#define  CF_MASKSET   (CF & BIT(8)) // Mask bit set
+#define  CF_DITHER    (CF & BIT(9)) // Dithering
+#define  CF_BLITMASK  (CF & BIT(10)) // blit_mask check (skip rendering pixels
                                    //  that wouldn't end up displayed on
                                    //  low-res screen using simple downscaler)
+
+#define  CF_TEXMODE_4BPP  (1 << 5)
+#define  CF_TEXMODE_8BPP  (2 << 5)
+#define  CF_TEXMODE_16BPP (3 << 5)
 
 //#ifdef __arm__
 //#ifndef ENABLE_GPU_ARMV7
@@ -129,6 +135,7 @@ static le16_t* gpuPixelSpanFn(le16_t* pDst, uintptr_t data, ptrdiff_t incr, size
 	struct GouraudColor * gcPtr;
 	u32 r, g, b;
 	s32 r_incr, g_incr, b_incr;
+	uint_fast16_t uDst;
 
 	// Caller counts in bytes, we count in pixels
 	incr /= 2;
@@ -143,62 +150,19 @@ static le16_t* gpuPixelSpanFn(le16_t* pDst, uintptr_t data, ptrdiff_t incr, size
 	}
 
 	do {
-		if (!CF_GOURAUD)
-		{   // NO GOURAUD
-			if (!CF_MASKCHECK && !CF_BLEND) {
-				if (CF_MASKSET) { *pDst = u16_to_le16(col | 0x8000); }
-				else            { *pDst = u16_to_le16(col);          }
-			} else if (CF_MASKCHECK && !CF_BLEND) {
-				if (!(le16_raw(*pDst) & HTOLE16(0x8000))) {
-					if (CF_MASKSET) { *pDst = u16_to_le16(col | 0x8000); }
-					else            { *pDst = u16_to_le16(col);          }
-				}
-			} else {
-				uint_fast16_t uDst = le16_to_u16(*pDst);
-				if (CF_MASKCHECK) { if (uDst & 0x8000) goto endpixel; }
-
-				uint_fast16_t uSrc = col;
-
-				if (CF_BLEND)
-					uSrc = gpuBlending<CF_BLENDMODE, skip_uSrc_mask>(uSrc, uDst);
-
-				if (CF_MASKSET) { *pDst = u16_to_le16(uSrc | 0x8000); }
-				else            { *pDst = u16_to_le16(uSrc);          }
+		if (!CF_MASKCHECK || !(le16_raw(*pDst) & HTOLE16(0x8000))) {
+			if (CF_GOURAUD)
+				col = gpuGouraudColor15bpp(r, g, b);
+			if (CF_BLEND) {
+				uDst = le16_to_u16(*pDst);
+				col = gpuBlending<CF_BLENDMODE, skip_uSrc_mask>(col, uDst);
 			}
+			if (CF_MASKSET)
+				col |= 0x8000;
 
-		} else
-		{   // GOURAUD
-
-			if (!CF_MASKCHECK && !CF_BLEND) {
-				col = gpuGouraudColor15bpp(r, g, b);
-				if (CF_MASKSET) { *pDst = u16_to_le16(col | 0x8000); }
-				else            { *pDst = u16_to_le16(col);          }
-			} else if (CF_MASKCHECK && !CF_BLEND) {
-				col = gpuGouraudColor15bpp(r, g, b);
-				if (!(le16_raw(*pDst) & HTOLE16(0x8000))) {
-					if (CF_MASKSET) { *pDst = u16_to_le16(col | 0x8000); }
-					else            { *pDst = u16_to_le16(col);          }
-				}
-			} else {
-				uint_fast16_t uDst = le16_to_u16(*pDst);
-				if (CF_MASKCHECK) { if (uDst & 0x8000) goto endpixel; }
-				col = gpuGouraudColor15bpp(r, g, b);
-
-				uint_fast16_t uSrc = col;
-
-				// Blend func can save an operation if it knows uSrc MSB is
-				//  unset. For untextured prims, this is always true.
-				const bool skip_uSrc_mask = true;
-
-				if (CF_BLEND)
-					uSrc = gpuBlending<CF_BLENDMODE, skip_uSrc_mask>(uSrc, uDst);
-
-				if (CF_MASKSET) { *pDst = u16_to_le16(uSrc | 0x8000); }
-				else            { *pDst = u16_to_le16(uSrc);          }
-			}
+			*pDst = u16_to_le16(col);
 		}
 
-endpixel:
 		if (CF_GOURAUD) {
 			r += r_incr;
 			g += g_incr;
@@ -306,22 +270,22 @@ static void gpuTileSpanFn(le16_t *pDst, u32 count, u16 data)
 		do
 		{
 			if (CF_MASKCHECK || CF_BLEND) { uDst = le16_to_u16(*pDst); }
-			if (CF_MASKCHECK) if (uDst&0x8000) { goto endtile; }
+			if (!CF_MASKCHECK || !(uDst & 0x8000)) {
+				uSrc = data;
 
-			uSrc = data;
+				if (CF_BLEND)
+					uSrc = gpuBlending<CF_BLENDMODE, skip_uSrc_mask>(uSrc, uDst);
+				if (CF_MASKSET)
+					uSrc |= 0x8000;
 
-			if (CF_BLEND)
-				uSrc = gpuBlending<CF_BLENDMODE, skip_uSrc_mask>(uSrc, uDst);
+				*pDst = u16_to_le16(uSrc);
 
-			if (CF_MASKSET) { *pDst = u16_to_le16(uSrc | 0x8000); }
-			else            { *pDst = u16_to_le16(uSrc);          }
-
-			//senquack - Did not apply "Silent Hill" mask-bit fix to here.
-			// It is hard to tell from scarce documentation available and
-			//  lack of comments in code, but I believe the tile-span
-			//  functions here should not bother to preserve any source MSB,
-			//  as they are not drawing from a texture.
-endtile:
+				//senquack - Did not apply "Silent Hill" mask-bit fix to here.
+				// It is hard to tell from scarce documentation available and
+				//  lack of comments in code, but I believe the tile-span
+				//  functions here should not bother to preserve any source MSB,
+				//  as they are not drawing from a texture.
+			}
 			pDst++;
 		}
 		while (--count);
@@ -406,8 +370,9 @@ static void gpuSpriteSpanFn(le16_t *pDst, u32 count, u8* pTxt, u32 u0)
 
 		//senquack - save source MSB, as blending or lighting macros will not
 		//           (Silent Hill gray rectangles mask bit bug)
-		if (CF_BLEND || CF_LIGHT) srcMSB = uSrc & 0x8000;
-		
+		if (CF_BLEND || CF_LIGHT)
+			srcMSB = uSrc & 0x8000;
+
 		if (CF_LIGHT)
 			uSrc = gpuLightingTXT(uSrc, r5, g5, b5);
 
@@ -416,9 +381,12 @@ static void gpuSpriteSpanFn(le16_t *pDst, u32 count, u8* pTxt, u32 u0)
 		if (CF_BLEND && should_blend)
 			uSrc = gpuBlending<CF_BLENDMODE, skip_uSrc_mask>(uSrc, uDst);
 
-		if (CF_MASKSET)                                    { *pDst = u16_to_le16(uSrc | 0x8000); }
-		else if (!MSB_PRESERVED && (CF_BLEND || CF_LIGHT)) { *pDst = u16_to_le16(uSrc | srcMSB); }
-		else                                               { *pDst = u16_to_le16(uSrc);          }
+		if (CF_MASKSET)
+			uSrc |= 0x8000;
+		else if (!MSB_PRESERVED && (CF_BLEND || CF_LIGHT))
+			uSrc |= srcMSB;
+
+		*pDst = u16_to_le16(uSrc);
 
 endsprite:
 		u0 += (CF_TEXTMODE==3) ? 2 : 1;
@@ -469,6 +437,34 @@ const PS gpuSpriteSpanDrivers[256] = {
 #undef TN
 #undef TIBLOCK
 
+static inline u32 gpuPolyTexGetSrc(const gpu_unai_t &gpu_unai, u32 l_u, u32 l_v, int TEXTMODE)
+{
+	const le16_t* TBA_ = gpu_unai.TBA;
+	const le16_t* CBA_;
+	u32 uSrc;
+
+	if (TEXTMODE != 3)
+		CBA_ = gpu_unai.CBA;
+
+	//senquack - adapted to work with new 22.10 fixed point routines:
+	//           (UNAI originally used 16.16)
+
+	if (TEXTMODE == 1) {  //  4bpp (CLUT)
+		u32 tba_addr = ((l_v << 1) & 0x7f800) + (l_u >> 11);
+		u8 rgb = ((u8*)TBA_)[tba_addr];
+		uSrc = le16_to_u16(CBA_[(rgb>>((l_u>>8)&0x4))&0xf]);
+	} else if (TEXTMODE == 2) {  //  8bpp (CLUT)
+		u32 tba_addr = ((l_v << 1) & 0x7f800) + (l_u >> 10);
+		u8 rgb = ((u8*)TBA_)[tba_addr];
+		uSrc = le16_to_u16(CBA_[rgb]);
+	} else if (TEXTMODE == 3) {  // 16bpp
+		u32 tba_addr = (l_v & 0x3fc00) + (l_u >> 10);
+		uSrc = le16_to_u16(TBA_[tba_addr]);
+	}
+
+	return uSrc;
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 //  GPU Polygon innerloops generator
 
@@ -498,8 +494,11 @@ static void gpuPolySpanFn(const gpu_unai_t &gpu_unai, le16_t *pDst, u32 count)
 	//  For textured prims, the generic lighting funcs always return it unset. (bonus!)
 	const bool skip_uSrc_mask = MSB_PRESERVED ? (!CF_TEXTMODE) : (!CF_TEXTMODE) || CF_LIGHT;
 	bool should_blend;
+	uint_fast16_t uSrc, uDst;
+	u32 bMsk;
 
-	u32 bMsk; if (CF_BLITMASK) bMsk = gpu_unai.blit_mask;
+	if (CF_BLITMASK)
+		bMsk = gpu_unai.blit_mask;
 
 	if (!CF_TEXTMODE)
 	{
@@ -508,25 +507,25 @@ static void gpuPolySpanFn(const gpu_unai_t &gpu_unai, le16_t *pDst, u32 count)
 			// UNTEXTURED, NO GOURAUD
 			const u16 pix15 = gpu_unai.PixelData;
 			do {
-				uint_fast16_t uSrc, uDst;
-
 				// NOTE: Don't enable CF_BLITMASK  pixel skipping (speed hack)
 				//  on untextured polys. It seems to do more harm than good: see
 				//  gravestone text at end of Medieval intro sequence. -senquack
 				//if (CF_BLITMASK) { if ((bMsk>>((((uintptr_t)pDst)>>1)&7))&1) { goto endpolynotextnogou; } }
 
-				if (CF_BLEND || CF_MASKCHECK) uDst = le16_to_u16(*pDst);
-				if (CF_MASKCHECK) { if (uDst&0x8000) { goto endpolynotextnogou; } }
+				if (!CF_MASKCHECK || !(le16_raw(*pDst) & HTOLE16(0x8000))) {
+					if (CF_BLEND) {
+						uDst = le16_to_u16(*pDst);
+						uSrc = gpuBlending<CF_BLENDMODE, skip_uSrc_mask>(pix15, uDst);
+					} else {
+						uSrc = pix15;
+					}
 
-				uSrc = pix15;
+					if (CF_MASKSET)
+						uSrc |= 0x8000;
 
-				if (CF_BLEND)
-					uSrc = gpuBlending<CF_BLENDMODE, skip_uSrc_mask>(uSrc, uDst);
+					*pDst = u16_to_le16(uSrc);
+				}
 
-				if (CF_MASKSET) { *pDst = u16_to_le16(uSrc | 0x8000); }
-				else            { *pDst = u16_to_le16(uSrc);          }
-
-endpolynotextnogou:
 				pDst++;
 			} while(--count);
 		}
@@ -537,34 +536,40 @@ endpolynotextnogou:
 			gcol_t l_gInc = gpu_unai.gInc;
 
 			do {
-				uint_fast16_t uDst, uSrc;
-
 				// See note in above loop regarding CF_BLITMASK
 				//if (CF_BLITMASK) { if ((bMsk>>((((uintptr_t)pDst)>>1)&7))&1) goto endpolynotextgou; }
 
-				if (CF_BLEND || CF_MASKCHECK) uDst = le16_to_u16(*pDst);
-				if (CF_MASKCHECK) { if (uDst&0x8000) goto endpolynotextgou; }
-
-				if (CF_DITHER) {
-					// GOURAUD, DITHER
-
-					u32 uSrc24 = gpuLightingRGB24(l_gCol);
+				if (!CF_MASKCHECK || !(le16_raw(*pDst) & HTOLE16(0x8000))) {
 					if (CF_BLEND)
-						uSrc24 = gpuBlending24<CF_BLENDMODE>(uSrc24, uDst);
-					uSrc = gpuColorQuantization24<CF_DITHER>(uSrc24, pDst);
-				} else {
-					// GOURAUD, NO DITHER
+						uDst = le16_to_u16(*pDst);
 
-					uSrc = gpuLightingRGB(l_gCol);
+					if (CF_DITHER) {
+						// GOURAUD, DITHER
 
-					if (CF_BLEND)
-						uSrc = gpuBlending<CF_BLENDMODE, skip_uSrc_mask>(uSrc, uDst);
+						u32 uSrc24 = gpuLightingRGB24(l_gCol);
+						if (CF_BLEND) {
+							uDst = le16_to_u16(*pDst);
+							uSrc24 = gpuBlending24<CF_BLENDMODE>(uSrc24, uDst);
+						}
+
+						uSrc = gpuColorQuantization24<CF_DITHER>(uSrc24, pDst);
+					} else {
+						// GOURAUD, NO DITHER
+
+						uSrc = gpuLightingRGB(l_gCol);
+
+						if (CF_BLEND) {
+							uDst = le16_to_u16(*pDst);
+							uSrc = gpuBlending<CF_BLENDMODE, skip_uSrc_mask>(uSrc, uDst);
+						}
+					}
+
+					if (CF_MASKSET)
+						uSrc |= 0x8000;
+
+					*pDst = u16_to_le16(uSrc);
 				}
 
-				if (CF_MASKSET) { *pDst = u16_to_le16(uSrc | 0x8000); }
-				else            { *pDst = u16_to_le16(uSrc);          }
-
-endpolynotextgou:
 				pDst++;
 				l_gCol.raw += l_gInc.raw;
 			}
@@ -583,9 +588,6 @@ endpolynotextgou:
 		u32 l_u_msk = gpu_unai.u_msk;     u32 l_v_msk = gpu_unai.v_msk;
 		u32 l_u = gpu_unai.u & l_u_msk;   u32 l_v = gpu_unai.v & l_v_msk;
 		s32 l_u_inc = gpu_unai.u_inc;     s32 l_v_inc = gpu_unai.v_inc;
-
-		const le16_t* TBA_ = gpu_unai.TBA;
-		const le16_t* CBA_; if (CF_TEXTMODE!=3) CBA_ = gpu_unai.CBA;
 
 		u8 r5, g5, b5;
 		u8 r8, g8, b8;
@@ -611,66 +613,64 @@ endpolynotextgou:
 
 		do
 		{
-			if (CF_BLITMASK) { if ((bMsk>>((((uintptr_t)pDst)>>1)&7))&1) goto endpolytext; }
-			if (CF_MASKCHECK || CF_BLEND) { uDst = le16_to_u16(*pDst); }
-			if (CF_MASKCHECK) if (uDst&0x8000) { goto endpolytext; }
+			do {
+				if (CF_BLITMASK && (bMsk & BIT(((uintptr_t)pDst >> 1) & 7)))
+					break;
 
-			//senquack - adapted to work with new 22.10 fixed point routines:
-			//           (UNAI originally used 16.16)
-			if (CF_TEXTMODE==1) {  //  4bpp (CLUT)
-				u32 tu=(l_u>>10);
-				u32 tv=(l_v<<1)&(0xff<<11);
-				u8 rgb=((u8*)TBA_)[tv+(tu>>1)];
-				uSrc=le16_to_u16(CBA_[(rgb>>((tu&1)<<2))&0xf]);
-				if (!uSrc) goto endpolytext;
-			}
-			if (CF_TEXTMODE==2) {  //  8bpp (CLUT)
-				uSrc = le16_to_u16(CBA_[(((u8*)TBA_)[(l_u>>10)+((l_v<<1)&(0xff<<11))])]);
-				if (!uSrc) goto endpolytext;
-			}
-			if (CF_TEXTMODE==3) {  // 16bpp
-				uSrc = le16_to_u16(TBA_[(l_u>>10)+((l_v)&(0xff<<10))]);
-				if (!uSrc) goto endpolytext;
-			}
+				if (CF_MASKCHECK && !(le16_raw(*pDst) & HTOLE16(0x8000)))
+					break;
 
-			// Save source MSB, as blending or lighting will not (Silent Hill)
-			if (CF_BLEND || CF_LIGHT) srcMSB = uSrc & 0x8000;
+				uSrc = gpuPolyTexGetSrc(gpu_unai, l_u, l_v, CF_TEXTMODE);
+				if (!uSrc)
+					break;
 
-			// When textured, only dither when LIGHT (texture blend) is enabled
-			// LIGHT &&  BLEND => dither
-			// LIGHT && !BLEND => dither
-			//!LIGHT &&  BLEND => no dither
-			//!LIGHT && !BLEND => no dither
+				// Save source MSB, as blending or lighting will not (Silent Hill)
+				if (CF_BLEND || CF_LIGHT)
+					srcMSB = uSrc & 0x8000;
 
-			if (CF_DITHER && CF_LIGHT) {
-				u32 uSrc24;
-				if ( CF_GOURAUD)
-					uSrc24 = gpuLightingTXT24Gouraud(uSrc, l_gCol);
-				if (!CF_GOURAUD)
-					uSrc24 = gpuLightingTXT24(uSrc, r8, g8, b8);
+				// When textured, only dither when LIGHT (texture blend) is enabled
+				// LIGHT &&  BLEND => dither
+				// LIGHT && !BLEND => dither
+				//!LIGHT &&  BLEND => no dither
+				//!LIGHT && !BLEND => no dither
 
-				if (CF_BLEND && srcMSB)
-					uSrc24 = gpuBlending24<CF_BLENDMODE>(uSrc24, uDst);
+				if (CF_DITHER && CF_LIGHT) {
+					u32 uSrc24;
+					if (CF_GOURAUD)
+						uSrc24 = gpuLightingTXT24Gouraud(uSrc, l_gCol);
+					else
+						uSrc24 = gpuLightingTXT24(uSrc, r8, g8, b8);
 
-				uSrc = gpuColorQuantization24<CF_DITHER>(uSrc24, pDst);
-			} else
-			{
-				if (CF_LIGHT) {
-					if ( CF_GOURAUD)
-						uSrc = gpuLightingTXTGouraud(uSrc, l_gCol);
-					if (!CF_GOURAUD)
-						uSrc = gpuLightingTXT(uSrc, r5, g5, b5);
+					if (CF_BLEND && srcMSB) {
+						uDst = le16_to_u16(*pDst);
+						uSrc24 = gpuBlending24<CF_BLENDMODE>(uSrc24, uDst);
+					}
+
+					uSrc = gpuColorQuantization24<CF_DITHER>(uSrc24, pDst);
+				} else
+				{
+					if (CF_LIGHT) {
+						if ( CF_GOURAUD)
+							uSrc = gpuLightingTXTGouraud(uSrc, l_gCol);
+						else
+							uSrc = gpuLightingTXT(uSrc, r5, g5, b5);
+					}
+
+					should_blend = MSB_PRESERVED ? uSrc & 0x8000 : srcMSB;
+					if (CF_BLEND && should_blend) {
+						uDst = le16_to_u16(*pDst);
+						uSrc = gpuBlending<CF_BLENDMODE, skip_uSrc_mask>(uSrc, uDst);
+					}
 				}
 
-				should_blend = MSB_PRESERVED ? uSrc & 0x8000 : srcMSB;
-				if (CF_BLEND && should_blend)
-					uSrc = gpuBlending<CF_BLENDMODE, skip_uSrc_mask>(uSrc, uDst);
-			}
+				if (CF_MASKSET)
+					uSrc |= 0x8000;
+				else if (!MSB_PRESERVED && (CF_BLEND || CF_LIGHT))
+					uSrc |= srcMSB;
 
-			if (CF_MASKSET)                                    { *pDst = u16_to_le16(uSrc | 0x8000); }
-			else if (!MSB_PRESERVED && (CF_BLEND || CF_LIGHT)) { *pDst = u16_to_le16(uSrc | srcMSB); }
-			else                                               { *pDst = u16_to_le16(uSrc);          }
-endpolytext:
+				*pDst = u16_to_le16(uSrc);
+			} while (0);
+
 			pDst++;
 			l_u = (l_u + l_u_inc) & l_u_msk;
 			l_v = (l_v + l_v_inc) & l_v_msk;
