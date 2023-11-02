@@ -64,10 +64,8 @@
 #ifdef __arm__
 #include "gpu_inner_blend_arm.h"
 #include "gpu_inner_light_arm.h"
-#define gpuBlending gpuBlendingARM
 #define gpuLightingTXT gpuLightingTXTARM
 #else
-#define gpuBlending gpuBlendingGeneric
 #define gpuLightingTXT gpuLightingTXTGeneric
 #endif
 
@@ -155,7 +153,7 @@ static le16_t* gpuPixelSpanFn(le16_t* pDst, uintptr_t data, ptrdiff_t incr, size
 				col = gpuGouraudColor15bpp(r, g, b);
 			if (CF_BLEND) {
 				uDst = le16_to_u16(*pDst);
-				col = gpuBlending<CF_BLENDMODE, skip_uSrc_mask>(col, uDst);
+				col = gpuBlending(col, uDst, CF_BLENDMODE, skip_uSrc_mask);
 			}
 			if (CF_MASKSET)
 				col |= 0x8000;
@@ -274,7 +272,7 @@ static void gpuTileSpanFn(le16_t *pDst, u32 count, u16 data)
 				uSrc = data;
 
 				if (CF_BLEND)
-					uSrc = gpuBlending<CF_BLENDMODE, skip_uSrc_mask>(uSrc, uDst);
+					uSrc = gpuBlending(uSrc, uDst, CF_BLENDMODE, skip_uSrc_mask);
 				if (CF_MASKSET)
 					uSrc |= 0x8000;
 
@@ -379,7 +377,7 @@ static void gpuSpriteSpanFn(le16_t *pDst, u32 count, u8* pTxt, u32 u0)
 		should_blend = MSB_PRESERVED ? uSrc & 0x8000 : srcMSB;
 
 		if (CF_BLEND && should_blend)
-			uSrc = gpuBlending<CF_BLENDMODE, skip_uSrc_mask>(uSrc, uDst);
+			uSrc = gpuBlending(uSrc, uDst, CF_BLENDMODE, skip_uSrc_mask);
 
 		if (CF_MASKSET)
 			uSrc |= 0x8000;
@@ -515,7 +513,7 @@ static void gpuPolySpanFn(const gpu_unai_t &gpu_unai, le16_t *pDst, u32 count)
 				if (!CF_MASKCHECK || !(le16_raw(*pDst) & HTOLE16(0x8000))) {
 					if (CF_BLEND) {
 						uDst = le16_to_u16(*pDst);
-						uSrc = gpuBlending<CF_BLENDMODE, skip_uSrc_mask>(pix15, uDst);
+						uSrc = gpuBlending(pix15, uDst, CF_BLENDMODE, skip_uSrc_mask);
 					} else {
 						uSrc = pix15;
 					}
@@ -549,10 +547,10 @@ static void gpuPolySpanFn(const gpu_unai_t &gpu_unai, le16_t *pDst, u32 count)
 						u32 uSrc24 = gpuLightingRGB24(l_gCol);
 						if (CF_BLEND) {
 							uDst = le16_to_u16(*pDst);
-							uSrc24 = gpuBlending24<CF_BLENDMODE>(uSrc24, uDst);
+							uSrc24 = gpuBlending24(uSrc24, uDst, CF_BLENDMODE);
 						}
 
-						uSrc = gpuColorQuantization24<CF_DITHER>(uSrc24, pDst);
+						uSrc = gpuColorQuantization24(uSrc24, pDst, CF_DITHER);
 					} else {
 						// GOURAUD, NO DITHER
 
@@ -560,7 +558,7 @@ static void gpuPolySpanFn(const gpu_unai_t &gpu_unai, le16_t *pDst, u32 count)
 
 						if (CF_BLEND) {
 							uDst = le16_to_u16(*pDst);
-							uSrc = gpuBlending<CF_BLENDMODE, skip_uSrc_mask>(uSrc, uDst);
+							uSrc = gpuBlending(uSrc, uDst, CF_BLENDMODE, skip_uSrc_mask);
 						}
 					}
 
@@ -643,10 +641,10 @@ static void gpuPolySpanFn(const gpu_unai_t &gpu_unai, le16_t *pDst, u32 count)
 
 					if (CF_BLEND && srcMSB) {
 						uDst = le16_to_u16(*pDst);
-						uSrc24 = gpuBlending24<CF_BLENDMODE>(uSrc24, uDst);
+						uSrc24 = gpuBlending24(uSrc24, uDst, CF_BLENDMODE);
 					}
 
-					uSrc = gpuColorQuantization24<CF_DITHER>(uSrc24, pDst);
+					uSrc = gpuColorQuantization24(uSrc24, pDst, CF_DITHER);
 				} else
 				{
 					if (CF_LIGHT) {
@@ -659,7 +657,7 @@ static void gpuPolySpanFn(const gpu_unai_t &gpu_unai, le16_t *pDst, u32 count)
 					should_blend = MSB_PRESERVED ? uSrc & 0x8000 : srcMSB;
 					if (CF_BLEND && should_blend) {
 						uDst = le16_to_u16(*pDst);
-						uSrc = gpuBlending<CF_BLENDMODE, skip_uSrc_mask>(uSrc, uDst);
+						uSrc = gpuBlending(uSrc, uDst, CF_BLENDMODE, skip_uSrc_mask);
 					}
 				}
 

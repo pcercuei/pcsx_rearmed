@@ -72,7 +72,7 @@ static void SetupDitheringConstants()
 
 ////////////////////////////////////////////////////////////////////////////////
 // Convert padded u32 5.4:5.4:5.4 bgr fixed-pt triplet to final bgr555 color,
-//  applying dithering if specified by template parameter.
+//  applying dithering if specified by DITHER parameter.
 //
 // INPUT:
 //     'uSrc24' input: 000bbbbbXXXX0gggggXXXX0rrrrrXXXX
@@ -84,8 +84,7 @@ static void SetupDitheringConstants()
 //                     ^ bit 16
 // Where 'X' are fixed-pt bits, '0' is zero-padding, and '-' is don't care
 ////////////////////////////////////////////////////////////////////////////////
-template <int DITHER>
-GPU_INLINE u16 gpuColorQuantization24(u32 uSrc24, const le16_t *pDst)
+GPU_INLINE u16 gpuColorQuantization24(u32 uSrc24, const le16_t *pDst, int DITHER)
 {
 	if (DITHER)
 	{
