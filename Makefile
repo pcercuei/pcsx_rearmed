@@ -350,7 +350,6 @@ CFLAGS += -DUSE_LIBRETRO_VFS
 endif
 OBJS += frontend/libretro.o
 CFLAGS += -Ideps/libretro-common/include
-CFLAGS += -DFRONTEND_SUPPORTS_RGB565
 CFLAGS += -DHAVE_LIBRETRO
 
 ifneq ($(DYNAREC),lightrec)

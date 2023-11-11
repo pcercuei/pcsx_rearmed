@@ -276,19 +276,6 @@ static void vout_set_mode(int w, int h, int raw_w, int raw_h, int bpp)
    set_vout_fb();
 }
 
-#ifndef FRONTEND_SUPPORTS_RGB565
-static void convert(void *buf, size_t bytes)
-{
-   unsigned int i, v, *p = buf;
-
-   for (i = 0; i < bytes / 4; i++)
-   {
-      v = p[i];
-      p[i] = (v & 0x001f001f) | ((v >> 1) & 0x7fe07fe0);
-   }
-}
-#endif
-
 // Function to add crosshairs
 static void addCrosshair(int port, int crosshair_color, unsigned short *buffer, int bufferStride, int pos_x, int pos_y, int thickness, int size_x, int size_y) {
    for (port = 0; port < 2; port++) {
@@ -372,9 +359,6 @@ static void vout_flip(const void *vram, int stride, int bgr24,
    }
 
 out:
-#ifndef FRONTEND_SUPPORTS_RGB565
-   convert(vout_buf_ptr, vout_pitch * vout_height * 2);
-#endif
    vout_fb_dirty = 1;
    pl_rearmed_cbs.flip_cnt++;
 }
@@ -1676,13 +1660,11 @@ bool retro_load_game(const struct retro_game_info *info)
 
    environ_cb(RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS, desc);
 
-#ifdef FRONTEND_SUPPORTS_RGB565
    enum retro_pixel_format fmt = RETRO_PIXEL_FORMAT_RGB565;
    if (environ_cb(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &fmt))
    {
       SysPrintf("RGB565 supported, using it\n");
    }
-#endif
 
    if (info == NULL || info->path == NULL)
    {
