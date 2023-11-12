@@ -73,6 +73,9 @@ static void check_mode_change(int force)
   }
 }
 
+unsigned short *pcsx_rearmed_vram;
+unsigned int pcsx_x, pcsx_y;
+
 void vout_update(void)
 {
   int bpp = (gpu.status & PSX_GPU_STATUS_RGB24) ? 24 : 16;
@@ -118,6 +121,12 @@ void vout_update(void)
     else
       // clip
       h = vram_h - src_y;
+  }
+
+  if (!(gpu.status & PSX_GPU_STATUS_RGB24)) {
+    pcsx_rearmed_vram = (unsigned short *)vram;
+    pcsx_x = src_x;
+    pcsx_y = src_y;
   }
 
   vram += (src_y * 1024 + src_x) * 2;

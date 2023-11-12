@@ -3050,6 +3050,8 @@ enum retro_pixel_format
     * It is also natively supported in APIs like OpenGL ES. */
    RETRO_PIXEL_FORMAT_RGB565   = 2,
 
+   RETRO_PIXEL_FORMAT_0BGR1555 = 3,
+
    /* Ensure sizeof() == sizeof(int). */
    RETRO_PIXEL_FORMAT_UNKNOWN  = INT_MAX
 };

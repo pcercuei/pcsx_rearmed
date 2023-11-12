@@ -106,6 +106,8 @@ static bool show_advanced_gpu_unai_settings = true;
 static float mouse_sensitivity = 1.0f;
 static unsigned int disk_current_index;
 
+static bool bgr555_supported;
+
 typedef enum
 {
    FRAMESKIP_NONE = 0,
@@ -244,7 +246,8 @@ static void set_vout_fb()
 
    vout_pitch = vout_width;
    if (environ_cb(RETRO_ENVIRONMENT_GET_CURRENT_SOFTWARE_FRAMEBUFFER, &fb)
-         && fb.format == RETRO_PIXEL_FORMAT_RGB565
+         && (fb.format == RETRO_PIXEL_FORMAT_RGB565
+             || fb.format == RETRO_PIXEL_FORMAT_0BGR1555)
          && vout_can_dupe)
    {
       vout_buf_ptr = fb.data;
@@ -271,6 +274,17 @@ static void vout_set_mode(int w, int h, int raw_w, int raw_h, int bpp)
       struct retro_system_av_info info;
       retro_get_system_av_info(&info);
       environ_cb(RETRO_ENVIRONMENT_SET_GEOMETRY, &info.geometry);
+   }
+
+   if (bpp != 24 && bgr555_supported) {
+      /* Use 0BGR1555 mode if supported for 15-bit frames. */
+      enum retro_pixel_format fmt = RETRO_PIXEL_FORMAT_0BGR1555;
+      environ_cb(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &fmt);
+   } else {
+      /* If 0BGR1555 is not supported, or the frame is 24-bit,
+       * it will need to be converted. Switch to RGB565 mode. */
+      enum retro_pixel_format fmt = RETRO_PIXEL_FORMAT_RGB565;
+      environ_cb(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &fmt);
    }
 
    set_vout_fb();
@@ -315,6 +329,10 @@ static void CrosshairDimensions(int port, struct CrosshairInfo *info) {
    info->size_y = psx_h * (pl_rearmed_cbs.gpu_neon.enhancement_enable ? 2 : 1) * (4.0f / 3.0f) / 40.0f;
 }
 
+unsigned int pcsx_stride;
+unsigned int pcsx_w;
+unsigned int pcsx_h;
+
 static void vout_flip(const void *vram, int stride, int bgr24,
       int x, int y, int w, int h, int dims_changed)
 {
@@ -322,6 +340,9 @@ static void vout_flip(const void *vram, int stride, int bgr24,
    const unsigned short *src = vram;
    int dstride = vout_pitch, h1 = h;
    int port = 0;
+
+   pcsx_w = w;
+   pcsx_h = h;
 
    if (vram == NULL || dims_changed || (in_enable_crosshair[0] + in_enable_crosshair[1]) > 0)
    {
@@ -341,6 +362,10 @@ static void vout_flip(const void *vram, int stride, int bgr24,
          bgr888_to_rgb565(dest, src, w * 3);
       }
    }
+   else if (bgr555_supported)
+   {
+      pcsx_stride = stride;
+   }
    else
    {
       for (; h1-- > 0; dest += dstride, src += stride)
@@ -349,7 +374,7 @@ static void vout_flip(const void *vram, int stride, int bgr24,
       }
    }
 
-   for (port = 0; port < 2; port++) {
+   for (port = 0; !bgr555_supported && port < 2; port++) {
       if (in_enable_crosshair[port] > 0 && (in_type[port] == PSE_PAD_TYPE_GUNCON || in_type[port] == PSE_PAD_TYPE_GUN))
       {
 	 struct CrosshairInfo crosshairInfo;
@@ -1660,7 +1685,14 @@ bool retro_load_game(const struct retro_game_info *info)
 
    environ_cb(RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS, desc);
 
-   enum retro_pixel_format fmt = RETRO_PIXEL_FORMAT_RGB565;
+   enum retro_pixel_format fmt = RETRO_PIXEL_FORMAT_0BGR1555;
+   if (environ_cb(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &fmt))
+   {
+      SysPrintf("0BGR1555 supported, using it\n");
+      bgr555_supported = true;
+   }
+
+   fmt = RETRO_PIXEL_FORMAT_RGB565;
    if (environ_cb(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &fmt))
    {
       SysPrintf("RGB565 supported, using it\n");
