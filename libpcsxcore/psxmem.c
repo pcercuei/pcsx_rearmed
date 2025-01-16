@@ -92,6 +92,12 @@ void *psxMap(unsigned long addr, size_t size, int is_fixed,
 	int try_, can_retry_addr = 0;
 	void *ret = MAP_FAILED;
 
+#ifdef LIGHTREC
+	/* Using Lightrec without a custom map... We really don't care where the
+	 * buffers are. So we can return malloc'd ones. */
+	return malloc(size);
+#endif
+
 	for (try_ = 0; try_ < 3; try_++)
 	{
 		if (ret != MAP_FAILED)
@@ -126,6 +132,11 @@ void *psxMap(unsigned long addr, size_t size, int is_fixed,
 
 void psxUnmap(void *ptr, size_t size, enum psxMapTag tag)
 {
+#ifdef LIGHTREC
+	free(ptr);
+	return;
+#endif
+
 	psxUnmapHook(ptr, size, tag);
 }
 
